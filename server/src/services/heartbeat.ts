@@ -2392,8 +2392,17 @@ function deriveRepoNameFromRepoUrl(repoUrl: string | null): string | null {
   }
 }
 
+/**
+ * Compare repository sources by identity. A remote URL names the same repository with or
+ * without a trailing `.git`, but a local path does not: `/tmp/repo.git` and `/tmp/repo` can be
+ * two different repositories. For a local path only a trailing `/.git` (the repository's own
+ * git directory) and trailing separators are dropped.
+ */
 function normalizeRepoUrl(url: string): string {
-  return url.trim().replace(/\.git\/?$/, "").replace(/\/$/, "");
+  const trimmed = url.trim().replace(/[\\/]+$/, "");
+  const isRemote =
+    /^(?!file:)[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) || /^[^/\\\s]+@[^/\\\s]+:/.test(trimmed);
+  return isRemote ? trimmed.replace(/\.git$/, "") : trimmed.replace(/[\\/]\.git$/, "");
 }
 
 /**
