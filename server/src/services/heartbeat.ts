@@ -2399,10 +2399,16 @@ function deriveRepoNameFromRepoUrl(repoUrl: string | null): string | null {
  * git directory) and trailing separators are dropped.
  */
 function normalizeRepoUrl(url: string): string {
-  const trimmed = url.trim().replace(/[\\/]+$/, "");
+  const trimmed = url.trim();
   const isRemote =
     /^(?!file:)[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) || /^[^/\\\s]+@[^/\\\s]+:/.test(trimmed);
-  return isRemote ? trimmed.replace(/\.git$/, "") : trimmed.replace(/[\\/]\.git$/, "");
+  if (isRemote) return trimmed.replace(/\/+$/, "").replace(/\.git$/, "");
+  // On POSIX a backslash is an ordinary file-name character, so only a Windows
+  // path (drive letter or UNC) treats it as a separator.
+  const windowsPath = /^[a-z]:[\\/]/i.test(trimmed) || trimmed.startsWith("\\\\");
+  return windowsPath
+    ? trimmed.replace(/[\\/]+$/, "").replace(/[\\/]\.git$/, "")
+    : trimmed.replace(/\/+$/, "").replace(/\/\.git$/, "");
 }
 
 /**
