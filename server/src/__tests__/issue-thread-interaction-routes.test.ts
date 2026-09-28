@@ -3096,78 +3096,101 @@ describe.sequential("issue thread interaction routes", () => {
     expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
   });
 
+  // The real task-bridge boundary (bridge-created or assigned issues only) is
+  // exercised against the database in authorization-service.test.ts. Here the
+  // access decision mirrors it by issue id, so the routes are tested with a
+  // representative bridge-created issue and an unrelated one.
+  const BRIDGE_KEY_ID = "bridge-key";
+  const bridgeActor = {
+    type: "agent",
+    agentId: CREATED_AGENT_ID,
+    companyId: "company-1",
+    source: "agent_key",
+    keyId: BRIDGE_KEY_ID,
+    keyScope: { kind: "task_bridge" },
+  };
+  function bridgeIssue(overrides: Record<string, unknown> = {}) {
+    // Created by the bridge key and handed to a worker agent, as bridges do.
+    return createIssue({
+      originKind: "task_bridge",
+      originId: BRIDGE_KEY_ID,
+      status: "todo",
+      assigneeAgentId: ASSIGNEE_AGENT_ID,
+      ...overrides,
+    });
+  }
+  function mirrorBridgeBoundary() {
+    mockAccessDecide.mockImplementation(async (input: { action: string; resource?: { issueId?: string } }) =>
+      // A bridge key holds no checkout-management grant over other agents' runs.
+      input.resource?.issueId === OTHER_ISSUE_ID || input.action === "tasks:manage_active_checkouts"
+        ? {
+            allowed: false,
+            action: input.action,
+            reason: "deny_scope",
+            explanation: "Task bridge key can only access assigned or bridge-created issues.",
+          }
+        : {
+            allowed: true,
+            action: input.action,
+            reason: "allow_explicit_grant",
+            explanation: "Allowed for bridge-created or assigned issue.",
+          });
+  }
+
   it("allows task-bridge keys to comment on bridge issues without runId", async () => {
+    mirrorBridgeBoundary();
+    mockIssueService.getById.mockResolvedValue(bridgeIssue());
     mockIssueService.addComment.mockResolvedValueOnce({
       id: "comment-1",
       issueId: ISSUE_ID,
       body: "Bridge comment",
     });
-    mockAccessDecide.mockResolvedValue({
-      allowed: true,
-      action: "issue:comment",
-      reason: "allow_explicit_grant",
-      explanation: "Allowed for bridge-created or assigned issue.",
-    });
-    const app = await createApp({
-      type: "agent",
-      agentId: CREATED_AGENT_ID,
-      companyId: "company-1",
-      source: "agent_key",
-      keyId: "bridge-key",
-      keyScope: { kind: "task_bridge" },
-    });
+    const app = await createApp(bridgeActor);
 
     const res = await request(app)
       .post(`/api/issues/${ISSUE_ID}/comments`)
       .send({ body: "Bridge comment" });
 
-    expect(res.status).toBe(201);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
     expect(mockIssueService.addComment).toHaveBeenCalled();
   });
 
-  it("allows task-bridge keys to update bridge issues without runId", async () => {
-    mockIssueService.update.mockResolvedValueOnce(createIssue({ title: "Updated by bridge" }));
-    mockAccessDecide.mockResolvedValue({
-      allowed: true,
-      action: "issue:mutate",
-      reason: "allow_explicit_grant",
-      explanation: "Allowed for bridge-created or assigned issue.",
-    });
-    const app = await createApp({
-      type: "agent",
-      agentId: CREATED_AGENT_ID,
-      companyId: "company-1",
-      source: "agent_key",
-      keyId: "bridge-key",
-      keyScope: { kind: "task_bridge" },
-    });
+  it("allows task-bridge keys to update idle bridge issues assigned to a worker", async () => {
+    mirrorBridgeBoundary();
+    mockIssueService.getById.mockResolvedValue(bridgeIssue());
+    mockIssueService.update.mockResolvedValueOnce(bridgeIssue({ title: "Updated by bridge" }));
+    const app = await createApp(bridgeActor);
 
     const res = await request(app)
       .patch(`/api/issues/${ISSUE_ID}`)
       .send({ title: "Updated by bridge" });
 
-    expect(res.status).toBe(200);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(mockIssueService.update).toHaveBeenCalled();
   });
 
-  it("denies task-bridge keys updating issues outside bridge boundary", async () => {
-    mockAccessDecide.mockResolvedValue({
-      allowed: false,
-      action: "issue:mutate",
-      reason: "deny_scope",
-      explanation: "Task bridge key can only access assigned or bridge-created issues.",
-    });
-    const app = await createApp({
-      type: "agent",
-      agentId: CREATED_AGENT_ID,
-      companyId: "company-1",
-      source: "agent_key",
-      keyId: "bridge-key",
-      keyScope: { kind: "task_bridge" },
-    });
+  it("keeps the run lock when a worker is actively running a bridge issue", async () => {
+    mirrorBridgeBoundary();
+    mockIssueService.getById.mockResolvedValue(bridgeIssue({ status: "in_progress" }));
+    const app = await createApp(bridgeActor);
 
     const res = await request(app)
       .patch(`/api/issues/${ISSUE_ID}`)
+      .send({ title: "Bridge update during a run" });
+
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+  });
+
+  it("denies task-bridge keys updating issues outside the bridge boundary", async () => {
+    mirrorBridgeBoundary();
+    mockIssueService.getById.mockResolvedValue(
+      createIssue({ id: OTHER_ISSUE_ID, status: "todo", assigneeAgentId: UNRELATED_AGENT_ID }),
+    );
+    const app = await createApp(bridgeActor);
+
+    const res = await request(app)
+      .patch(`/api/issues/${OTHER_ISSUE_ID}`)
       .send({ title: "Unauthorized bridge update" });
 
     expect(res.status).toBe(403);

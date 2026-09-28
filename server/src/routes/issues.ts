@@ -3896,7 +3896,9 @@ export function issueRoutes(
     kind: CrossIssueInfluenceKind,
   ) {
     if (req.actor.type !== "agent") return true;
-    if (isTaskBridgeKeyActor(req)) return true;
+    // A standalone task-bridge key has no worker run to count against; a bridge
+    // key that does carry a run stays under the per-run cap.
+    if (isTaskBridgeKeyActor(req) && !req.actor.runId) return true;
     if (!req.actor.agentId || !req.actor.runId)
       throw crossIssueInfluenceRunContextError();
 
@@ -5336,7 +5338,10 @@ export function issueRoutes(
     if (issue.assigneeAgentId === null) {
       return true;
     }
-    if (isTaskBridgeKeyActor(req)) {
+    // decideIssueAccess has already limited a task-bridge key to its own bridge
+    // issues. It may write them while idle, but an issue another agent is
+    // actively running keeps its run/checkout lock below.
+    if (isTaskBridgeKeyActor(req) && issue.status !== "in_progress") {
       return true;
     }
     if (issue.assigneeAgentId !== actorAgentId) {
