@@ -555,6 +555,12 @@ const RESOLVE_ISSUE_RECOVERY_ACTION_OUTCOMES = [
   "cancelled",
 ] as const;
 
+export const retryWorkspaceExportSchema = z.object({
+  actionId: z.string().guid(),
+  runId: z.string().guid(),
+  repairNote: z.string().trim().min(20).max(12000),
+}).strict();
+
 export const resolveIssueRecoveryActionSchema = z
   .object({
     executionReconciliation: z
@@ -1011,6 +1017,14 @@ export const issueCommentMetadataSchema = z
       .max(160)
       .nullable()
       .optional(),
+    recovery: z.object({
+      kind: z.literal("disposition_repair_escalated"),
+      actionId: z.string().guid(),
+      attemptCount: z.number().int().nonnegative(),
+      maxAttempts: z.number().int().positive(),
+      reason: z.string().trim().min(1).max(160),
+      assigneeAgentId: z.string().guid().nullable(),
+    }).strict().optional(),
     sections: z.array(issueCommentMetadataSectionSchema).min(1).max(20),
   })
   .strict();
@@ -1332,7 +1346,7 @@ export const paperclipQuestionSetPayloadSchema = z
   .object({
     schema: z.literal("paperclip.question_set.v1"),
     title: z.string().max(1000).optional(),
-    description: z.string().max(4000).optional(),
+    description: z.string().max(100_000).optional(),
     submitLabel: z.string().max(200).optional(),
     questions: z.array(paperclipQuestionSchema).min(1).max(64),
   })
